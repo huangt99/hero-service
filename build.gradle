@@ -1,11 +1,30 @@
+import com.bmuschko.gradle.docker.tasks.image.Dockerfile
+import com.bmuschko.gradle.docker.tasks.image.DockerBuildImage
+
+buildscript {
+	repositories {
+	  maven {
+		url "https://plugins.gradle.org/m2/"
+	  }
+	  mavenCentral()
+	}
+	dependencies {
+		classpath('org.springframework.boot:spring-boot-gradle-plugin:2.2.1.RELEASE')
+		classpath "com.bmuschko:gradle-docker-plugin:6.1.1"
+	}
+}
+
 plugins {
 	id 'org.springframework.boot' version '2.2.2.RELEASE'
 	id 'io.spring.dependency-management' version '1.0.8.RELEASE'
 	id 'java'
 }
 
+apply plugin:"com.bmuschko.docker-remote-api"
+
+
 group = 'com.example'
-version = '0.0.1-SNAPSHOT'
+version = '0.0.1'
 sourceCompatibility = '11'
 
 repositories {
@@ -22,6 +41,61 @@ dependencies {
 	}
 }
 
+
 test {
 	useJUnitPlatform()
 }
+
+//tag::extVariables[]
+ext {
+	dockerTag = "springboot/${project.name}:${project.version}".toLowerCase() // <1>
+	dockerBuildDir = mkdir("${buildDir}/docker") // <2>
+}
+//end::extVariables[]
+
+
+//tag::prepareDocker[]
+task prepareDocker(type: Copy, dependsOn: assemble) { // <3>
+	description = 'Copy files from src/main/docker and application jar to Docker temporal build directory'
+	group = 'Docker'
+
+	from 'src/main/docker'
+	from 'src/main/resources'
+	from project.jar
+
+	into dockerBuildDir
+}
+//end::prepareDocker[]
+
+//tag::createDockerfile[]
+task createDockerfile(type: Dockerfile, dependsOn: prepareDocker) { // <4>
+	description = 'Create a Dockerfile file'
+	group = 'Docker'
+
+	destFile = project.file("${dockerBuildDir}/Dockerfile")
+
+	from 'adoptopenjdk:11-jdk-hotspot'
+	
+	exposePort 8080
+
+	workingDir '/app'
+
+	environmentVariable 'ENV_VAR', 'production'
+
+	copyFile jar.archiveName, 'application.jar'
+	copyFile 'app-entrypoint.sh', 'app-entrypoint.sh' // <5>
+	runCommand 'chmod +x app-entrypoint.sh'
+
+	entryPoint '/app/app-entrypoint.sh' // <5>
+}
+//end::createDockerfile[]
+
+//tag::buildImage[]
+task buildImage(type: DockerBuildImage, dependsOn: createDockerfile) { // <6>
+	description = 'Create Docker image to run the Spring Boot application'
+	group = 'Docker'
+
+	inputDir = file(dockerBuildDir)
+	images.add(dockerTag)
+}
+//end::buildImage[]
